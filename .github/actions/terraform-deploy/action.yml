@@ -1,0 +1,70 @@
+name: 'Terraform Deploy'
+description: 'Deploy infrastructure using Terraform with Azure backend'
+inputs:
+  working-directory:
+    description: 'Working directory for Terraform commands'
+    required: true
+  backend-resource-group:
+    description: 'Azure resource group for Terraform backend'
+    required: true
+  backend-storage-account:
+    description: 'Azure storage account for Terraform backend'
+    required: true
+  backend-container:
+    description: 'Azure storage container for Terraform backend'
+    required: true
+  state-key:
+    description: 'Terraform state file key'
+    required: true
+  action:
+    description: 'Action to perform: plan, apply, or destroy'
+    required: true
+    default: 'plan'
+  terraform-vars:
+    description: 'Terraform variables (multiline string)'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Terraform Init
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        terraform init \
+          -backend-config="resource_group_name=${{ inputs.backend-resource-group }}" \
+          -backend-config="storage_account_name=${{ inputs.backend-storage-account }}" \
+          -backend-config="container_name=${{ inputs.backend-container }}" \
+          -backend-config="key=${{ inputs.state-key }}"
+    
+    - name: Set Terraform Variables
+      if: inputs.terraform-vars != ''
+      shell: bash
+      run: |
+        echo "Setting Terraform variables..."
+        while IFS='=' read -r key value; do
+          if [[ -n "$key" && -n "$value" ]]; then
+            export "TF_VAR_$key=$value"
+            echo "TF_VAR_$key=$value" >> $GITHUB_ENV
+          fi
+        done <<< "${{ inputs.terraform-vars }}"
+    
+    - name: Terraform Plan
+      id: plan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        terraform plan -out=tfplan 2>&1 | tee plan_output.txt
+        echo "Plan completed successfully"
+    
+    - name: Terraform Apply
+      if: inputs.action == 'apply'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform apply tfplan
+    
+    - name: Terraform Destroy
+      if: inputs.action == 'destroy'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform destroy -auto-approve

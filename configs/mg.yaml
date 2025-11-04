@@ -1,0 +1,18 @@
+schema_version: 1
+management_groups:
+  - id: landingzones
+    display_name: "Landing Zones"
+    parent_id: root
+    subscriptions:
+      - "d630962a-30c4-4133-b38a-5b28d7cf649f"
+
+  - id: platform
+    display_name: "Platform"
+    parent_id: landingzones
+    subscriptions: []  # none
+
+  - id: connectivity
+    display_name: "Connectivity"
+    parent_id: platform
+    subscriptions:
+      - "B79D5529-469B-4089-A5EB-EDE783F663EA"   # note mixed case on purpose

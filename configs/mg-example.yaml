@@ -1,0 +1,214 @@
+# ============================================================================
+# Management Groups Configuration Example - Azure Landing Zones
+# ============================================================================
+# 
+# This configuration defines the Azure Management Group hierarchy for your
+# organization. Management Groups provide a governance scope above subscriptions
+# for applying policies, access control, and compliance reporting.
+#
+# FULLY CUSTOMIZABLE HIERARCHY:
+# This example shows one possible organizational structure, but you have complete
+# flexibility to design your hierarchy according to your organization's needs.
+# You can create any structure that makes sense for your business, governance,
+# and operational requirements.
+#
+# Key Features:
+# - Hierarchical organization structure (up to 6 levels deep)
+# - Subscription assignment to management groups
+# - Policy and access control inheritance
+# - Compliance and cost management scoping
+#
+# IMPORTANT NOTES:
+# - Management groups are created in dependency order (parent before child)
+# - Subscription IDs are case-insensitive but will be normalized to lowercase
+# - Each subscription can only belong to one management group
+# - The 'root' parent_id refers to your tenant's root management group
+# - YOU CONTROL THE STRUCTURE: Design it to match your organization
+#
+# ============================================================================
+
+# Schema version for configuration validation
+# Current supported version: 1
+schema_version: 1
+
+# ============================================================================
+# MANAGEMENT GROUP HIERARCHY
+# ============================================================================
+# Define your organizational structure using management groups
+# 
+# COMPLETE FLEXIBILITY: The structure below is just one example. You can create
+# any hierarchy that fits your organization's needs:
+# - Different department structures
+# - Geographic divisions
+# - Business unit arrangements  
+# - Project-based groupings
+# - Regulatory compliance boundaries
+# - Any combination that works for your governance model
+#
+# Each management group must have:
+# - id: Unique identifier (alphanumeric, hyphens, underscores)
+# - display_name: Human-readable name shown in Azure Portal
+# - parent_id: Either 'root' or another management group's id
+# - subscriptions: Array of subscription GUIDs (optional)
+
+management_groups:
+  # ============================================================================
+  # LEVEL 1: Top-level organizational divisions
+  # ============================================================================
+  
+  # Main organizational container
+  - id: "your-organization"                    # REPLACE: Your organization identifier
+    display_name: "Your Organization"          # REPLACE: Your organization name
+    parent_id: "root"                          # Always 'root' for top-level groups
+    subscriptions: []
+
+  # ============================================================================
+  # LEVEL 2: Major business divisions
+  # ============================================================================
+  
+  # Platform services and shared infrastructure
+  - id: "platform"
+    display_name: "Platform"
+    parent_id: "your-organization"             # REPLACE: Match your top-level id
+    subscriptions: []
+
+  # Business workloads and applications
+  - id: "landingzones"
+    display_name: "Landing Zones"
+    parent_id: "your-organization"             # REPLACE: Match your top-level id
+    subscriptions: []
+  # Sandbox and development environments
+  - id: "sandbox"
+    display_name: "Sandbox"
+    parent_id: "your-organization"             # REPLACE: Match your top-level id
+    subscriptions:
+      - "sandbox-subscription-id-1"           # REPLACE: Sandbox subscription GUIDs
+      - "sandbox-subscription-id-2"           # REPLACE: Additional sandbox subscriptions
+
+  # ============================================================================
+  # LEVEL 3: Platform specialization
+  # ============================================================================
+  
+  # Network connectivity and security
+  - id: "connectivity"
+    display_name: "Connectivity"
+    parent_id: "platform"
+    subscriptions:
+      - "hub-subscription-id-1"               # REPLACE: Hub network subscriptions
+      - "hub-subscription-id-2"               # REPLACE: Additional hub subscriptions
+
+  # Identity and access management
+  - id: "identity"
+    display_name: "Identity"
+    parent_id: "platform"
+    subscriptions:
+      - "identity-subscription-id"            # REPLACE: Identity services subscription
+
+  # Management and monitoring
+  - id: "management"
+    display_name: "Management"
+    parent_id: "platform"
+    subscriptions:
+      - "management-subscription-id"          # REPLACE: Management services subscription
+
+  # ============================================================================
+  # LEVEL 3: Landing zone environments
+  # ============================================================================
+  
+  # Production workloads
+  - id: "production"
+    display_name: "Production"
+    parent_id: "landingzones"
+    subscriptions:
+      - "prod-app1-subscription-id"           # REPLACE: Production subscription GUIDs
+      - "prod-app2-subscription-id"           # REPLACE: Additional production subscriptions
+
+  # Non-production workloads
+  - id: "nonproduction"
+    display_name: "Non-Production"
+    parent_id: "landingzones"
+    subscriptions:
+      - "dev-subscription-id"                 # REPLACE: Development subscription GUIDs
+      - "test-subscription-id"                # REPLACE: Testing subscription GUIDs
+      - "staging-subscription-id"             # REPLACE: Staging subscription GUIDs
+
+  # ============================================================================
+  # LEVEL 4: Detailed application grouping (optional)
+  # ============================================================================
+  
+  # Application-specific production environments
+  - id: "prod-app1"
+    display_name: "Production - Application 1"
+    parent_id: "production"
+    subscriptions:
+      - "prod-app1-frontend-sub-id"           # REPLACE: App-specific subscriptions
+      - "prod-app1-backend-sub-id"            # REPLACE: Additional app subscriptions
+
+  # Application-specific development environments  
+  - id: "dev-app1"
+    display_name: "Development - Application 1"
+    parent_id: "nonproduction"
+    subscriptions:
+      - "dev-app1-subscription-id"            # REPLACE: Development subscription
+
+# ============================================================================
+# CONFIGURATION GUIDELINES
+# ============================================================================
+
+# HIERARCHY FLEXIBILITY:
+# The structure shown above is just ONE example. You can organize your 
+# management groups in countless ways to match your organization:
+# - By geography: regions -> countries -> cities
+# - By business units: divisions -> departments -> teams  
+# - By environment: prod -> staging -> dev -> sandbox
+# - By compliance: regulated -> internal -> public
+# - By cost centers: finance -> operations -> development
+# - Mixed approaches: combining multiple organizational dimensions
+#
+# DESIGN YOUR OWN STRUCTURE based on:
+# - How your organization is structured
+# - How you want to apply policies and governance
+# - How you manage access and permissions
+# - How you track costs and compliance
+# - How you want to organize workloads
+
+# NAMING CONVENTIONS:
+# - Use lowercase with hyphens for management group IDs
+# - Use descriptive display names with proper capitalization
+# - Keep IDs short but meaningful (e.g., 'connectivity' not 'network-connectivity-services')
+# - Choose names that make sense for YOUR organization
+
+# HIERARCHY BEST PRACTICES:
+# - Level 1: Organization/tenant root
+# - Level 2: Major divisions (platform, landingzones, sandbox, decommissioned)
+# - Level 3: Environment types (prod, nonprod) or service types (connectivity, identity)
+# - Level 4+: Application or team-specific groupings
+# BUT REMEMBER: These are suggestions, not requirements. Design what works for you!
+
+# SUBSCRIPTION ASSIGNMENT:
+# - Assign subscriptions to the most specific management group
+# - Avoid assigning subscriptions to parent groups when child groups exist
+
+# POLICY INHERITANCE:
+# - Policies applied to parent groups automatically apply to all children
+# - Use this for organization-wide policies (security, compliance, naming)
+# - Apply more specific policies at lower levels
+
+# RBAC INHERITANCE:  
+# - Role assignments at parent groups inherit to all children
+# - Use for broad access patterns (security team access to all environments)
+# - Apply specific access controls at appropriate levels
+
+# ============================================================================
+# VALIDATION CHECKLIST
+# ============================================================================
+# Before applying this configuration:
+#
+# - All subscription IDs are valid GUIDs and accessible
+# - Management group IDs are unique across the entire hierarchy
+# - No circular dependencies in parent-child relationships
+# - Hierarchy depth does not exceed 6 levels (excluding root)
+# - Each subscription appears in only one management group
+# - Parent management groups are defined before their children
+# - All parent_id values reference either 'root' or existing management group IDs
+#

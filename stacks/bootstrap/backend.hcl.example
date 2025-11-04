@@ -1,0 +1,7 @@
+# Backend configuration for Terraform state
+# Use with: terraform init -backend-config=backend.hcl
+
+resource_group_name  = "rg-terraform-state"
+storage_account_name = "sttfstatenetworkv2"
+container_name       = "tfstate"
+key                  = "network-v2.tfstate"

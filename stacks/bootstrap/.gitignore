@@ -1,0 +1,13 @@
+# Terraform files
+.terraform/
+.terraform.lock.hcl
+*.tfplan
+*.tfstate
+*.tfstate.*
+
+# Generated backend configuration (can be regenerated from bootstrap.yaml)
+backend.hcl
+
+# OS generated files
+.DS_Store
+Thumbs.db

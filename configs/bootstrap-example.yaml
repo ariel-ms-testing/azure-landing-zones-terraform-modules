@@ -1,0 +1,211 @@
+# ============================================================================
+# Bootstrap Configuration Example - Azure Landing Zones
+# ============================================================================
+# 
+# This configuration creates the foundational authentication and deployment 
+# infrastructure for Azure Landing Zones, including:
+# 
+# - Azure AD Applications & Service Principals
+# - GitHub Environments & OIDC Integration  
+# - Key Vault for Secret Management
+# - RBAC Role Assignments
+# - Terraform Backend Configuration
+#
+# SECURITY NOTE: This file will be used to create high-privilege resources.
+# Review all settings carefully before deployment.
+#
+# PREREQUISITES:
+#    1. Azure CLI authenticated with Global Administrator rights
+#    2. GitHub repository admin access
+#    3. External Terraform state storage created (see tfstate section)
+#    4. All subscription IDs verified and accessible
+#
+# ============================================================================
+
+# ============================================================================
+# AZURE TENANT CONFIGURATION
+# ============================================================================
+# Your Azure AD tenant identifier
+tenant_id: "00000000-0000-0000-0000-000000000000"  # REPLACE: Your Azure AD tenant ID
+
+# ============================================================================
+# GITHUB REPOSITORY CONFIGURATION  
+# ============================================================================
+# GitHub repository where this infrastructure code is stored
+# This is used to create GitHub environments and configure OIDC federation
+github:
+  owner: "your-github-org"          # REPLACE: Your GitHub organization or username
+  repo: "your-landing-zones-repo"   # REPLACE: Your repository name
+
+# ============================================================================
+# BOOTSTRAP DEPLOYMENT SETTINGS
+# ============================================================================
+bootstrap:
+  # GitHub Actions Integration
+  # Set to true to create GitHub environments and configure automated deployment
+  # Set to false for local-only bootstrap (manual deployment only)
+  github_enabled: true
+
+  # Service Principal Configuration (only used if github_enabled = true)
+  github:
+    # Service Principal Strategy:
+    # • false (RECOMMENDED): Creates one service principal per module type
+    #   - Provides better security isolation and granular permissions
+    #   - Example: sp-mg, sp-network, sp-policy
+    # • true: Creates single service principal for all deployments
+    #   - Simpler to manage but broader permission scope
+    use_single_sp: false
+
+    # Module-Scoped Service Principals:
+    # • true (RECOMMENDED): Creates dedicated SPs for each module type (mg, network, policy)
+    #   - Best security practice with least privilege access
+    # • false: Uses environment-scoped service principals instead
+    use_module_scoped_sp: true
+
+    # Authentication Method:
+    # • true (RECOMMENDED): Uses OIDC federated credentials (no secrets to manage)
+    #   - More secure, no secret rotation required
+    #   - Requires GitHub Actions OIDC token exchange
+    # • false: Uses traditional client secrets
+    #   - Requires periodic secret rotation (90 days recommended)
+    use_federated_credentials: true
+
+  # Key Vault Configuration
+  # Used to store sensitive deployment secrets and configurations
+  key_vault:
+    name: "kv-bootstrap-myorg"       # REPLACE: Globally unique Key Vault name
+    
+    # Network Access Control
+    # IP addresses allowed to access the Key Vault (empty array = allow all)
+    # Best Practice: Restrict to corporate IP ranges in production
+    allowed_ips: [
+      # "203.0.113.0/24",             # Example: Corporate office network
+      # "198.51.100.50"               # Example: Specific admin IP
+    ]
+    
+    # Subnet Access Control  
+    # Azure subnet resource IDs allowed to access Key Vault
+    # Example: ["/subscriptions/{sub-id}/resourceGroups/{rg}/providers/Microsoft.Network/virtualNetworks/{vnet}/subnets/{subnet}"]
+    allowed_subnets: []
+
+    # Production Protection
+    # • true (PRODUCTION): Enables purge protection (cannot be permanently deleted for 90 days)
+    # • false (DEVELOPMENT): Allows immediate permanent deletion
+    # WARNING: Set to true for production environments
+    purge_protection: false           # CHANGE TO TRUE FOR PRODUCTION
+
+# ============================================================================
+# MODULE DEPLOYMENT CONFIGURATION
+# ============================================================================
+# Controls which infrastructure modules are enabled and their configuration
+
+modules:
+  # Network Module (Hub-Spoke Architecture)
+  network:
+    enabled: true                    # Set false to skip network environment creation
+    
+    # Optional: Custom environment name (defaults to "network")
+    # environment: "network-prod"
+    
+    # Optional: Custom subscription for network module authentication
+    # subscription_id: "network-subscription-id"
+
+  # Management Groups Module  
+  mg:
+    enabled: true                    # Set false to skip management group deployment
+    environment: "mg"                # GitHub environment name for MG deployment
+    
+    # Management Group Scope
+    # The root management group ID where this module has permissions
+    # Find this: Azure Portal > Management Groups > Root Group > Properties
+    scope_id: "/providers/Microsoft.Management/managementGroups/your-root-mg-id"  # REPLACE
+    
+    # Managed Subscriptions
+    # Subscriptions that the MG module can attach/move between management groups
+    # The service principal will receive Owner role on these subscriptions
+    managed_subscriptions:
+      - "subscription-id-1" 
+      - "subscription-id-2"
+      - "subscription-id-3"
+      # Add additional subscriptions as needed
+    
+    # Authentication Subscription (optional)
+    # Subscription used for Azure provider authentication
+    # Defaults to tfstate.subscription_id if not specified
+    subscription_id: "management-subscription-id"  # REPLACE or remove to use tfstate subscription
+
+  # Policy Module (Azure Policy Management)
+  policy:
+    enabled: false                   # Set true to enable policy deployment
+    environment: "policy"            # GitHub environment name for policy deployment
+    
+    # Policy Scope (usually same as MG scope)
+    scope_id: "/providers/Microsoft.Management/managementGroups/your-root-mg-id"  # REPLACE
+    
+    # Optional: Custom subscription for policy module authentication
+    # subscription_id: "policy-subscription-id"
+
+# ============================================================================
+# NETWORK ENVIRONMENTS (Hub-Spoke Architecture)
+# ============================================================================
+# These sections define the network environments that will be created
+# Only used if modules.network.enabled = true
+
+# Hub Networks (Central connectivity points)
+# Typically contains shared services like firewalls, VPN gateways, DNS
+hubs:
+  - name: "hub-westeurope"           # Environment name (will become GitHub environment)
+    subscription_id: "hub-subscription-id"  # REPLACE: Subscription for hub resources
+    
+  # Example: Multi-region setup
+  # - name: "hub-northeurope" 
+  #   subscription_id: "hub-north-subscription-id"
+
+# Spoke Networks (Workload environments)  
+# Connected to hubs for centralized connectivity and security
+spokes:
+  - name: "spoke-production"         # Environment name (will become GitHub environment)
+    subscription_id: "spoke-prod-subscription-id"  # REPLACE
+    
+  - name: "spoke-development"
+    subscription_id: "spoke-dev-subscription-id"   # REPLACE
+    
+  - name: "spoke-staging"
+    subscription_id: "spoke-stage-subscription-id" # REPLACE
+
+# ============================================================================
+# TERRAFORM STATE STORAGE CONFIGURATION
+# ============================================================================
+# External storage account for Terraform state files
+# 
+# CRITICAL: This storage account MUST be created BEFORE running bootstrap
+# Use the provided script: ./scripts/foundation/create-tfstate-storage.sh
+#
+
+tfstate:
+  subscription_id: "tfstate-subscription-id"        # REPLACE: Subscription containing state storage
+  resource_group: "rg-terraform-state"              # REPLACE: Resource group name
+  location: "westeurope"                             # Azure region for state storage
+  storage_account: "sttfstate{organization}{env}"   # REPLACE: Globally unique storage account name
+                                                     # Example: sttfstatemyorg001
+  container: "tfstate"                               # Container name for state files
+
+# ============================================================================
+# VALIDATION CHECKLIST
+# ============================================================================
+# Before deploying, verify:
+# 
+# - All subscription IDs are correct and accessible
+# - tenant_id matches your Azure AD tenant
+# - GitHub owner/repo values are correct
+# - Key Vault name is globally unique
+# - Storage account name is globally unique
+# - External state storage has been created
+# - Current user has required permissions:
+#   - Global Administrator OR Privileged Role Administrator (Azure AD)
+#   - Owner OR User Access Administrator (Subscriptions/Management Groups)
+#   - Admin access to GitHub repository
+# - purge_protection set to true for production environments
+# - allowed_ips configured for production security requirements
+#
+# Deploy with: ./scripts/deploy-bootstrap.sh all

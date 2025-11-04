@@ -1,0 +1,339 @@
+# ============================================================================
+# Network Configuration Example - Azure Landing Zones
+# ============================================================================
+# 
+# This configuration defines a hub-spoke network architecture for Azure Landing Zones.
+# The hub-spoke model provides centralized connectivity, security, and shared services
+# while isolating workloads in separate spoke networks.
+#
+# FULLY FLEXIBLE ARCHITECTURE:
+# This example demonstrates one possible network design, but you have complete
+# flexibility to design your network topology according to your requirements:
+# - Single or multiple hubs (multi-region, multi-purpose)
+# - Any number of spokes with different purposes
+# - Various connectivity patterns and security models
+# - Custom subnet layouts and addressing schemes
+# - Different firewall and routing configurations
+#
+# Key Features:
+# - Multi-subscription deployment support
+# - Centralized security with Azure Firewall
+# - Automated hub-to-spoke peering
+# - Flexible routing with User Defined Routes
+# - Optional NAT Gateway for outbound connectivity
+# - Service endpoints and private endpoints support
+#
+# IMPORTANT NOTES:
+# - Schema version 2 required for this configuration format
+# - Hub networks are deployed first, then spoke networks
+# - Cross-subscription peering requires proper RBAC permissions
+# - Address spaces must not overlap between networks
+# - Firewall rules can be customized for your security requirements
+#
+# ============================================================================
+
+# Schema version for configuration validation
+# Current supported version: 2
+schema_version: 2
+
+# ============================================================================
+# GLOBAL SETTINGS
+# ============================================================================
+# Settings applied to all network resources
+global:
+  # Optional prefix for resource naming (leave empty for no prefix)
+  naming_prefix: ""                          # Example: "myorg" results in "myorg-vnet-hub"
+  
+  # Default Azure region for resources (can be overridden per hub/spoke)
+  default_location: "westeurope"             # REPLACE: Your preferred Azure region
+  
+  # Enable diagnostic logging for network resources
+  enable_diagnostics: false                  # Set true to enable diagnostic logs
+  
+  # Optional: Log Analytics workspace for diagnostics
+  # log_analytics_workspace_id: "/subscriptions/{sub-id}/resourceGroups/{rg}/providers/Microsoft.OperationalInsights/workspaces/{workspace}"
+
+# ============================================================================
+# HUB NETWORKS (Central Connectivity)
+# ============================================================================
+# Hub networks provide centralized connectivity, security, and shared services
+# You can have multiple hubs for different regions or purposes
+
+hubs:
+  # Primary hub for West Europe region
+  - name: "hub-westeurope"                   # REPLACE: Your hub name
+    subscription_id: "hub-subscription-id"   # REPLACE: Hub subscription GUID
+    resource_group: "rg-hub-westeurope-network"  # REPLACE: Hub resource group name
+    location: "westeurope"                   # Azure region for hub resources
+    
+    # Virtual Network Configuration
+    vnet:
+      name: "vnet-hub-westeurope"            # REPLACE: Hub VNet name
+      address_space: ["10.0.0.0/16"]        # REPLACE: Hub address space (non-overlapping)
+      
+      # Hub Subnets - Required and optional subnets for hub services
+      subnets:
+        # REQUIRED: Azure Firewall subnet (exact name required)
+        - name: "AzureFirewallSubnet"
+          address_prefixes: ["10.0.0.0/26"]  # Minimum /26 required for Azure Firewall
+          
+        # OPTIONAL: Gateway subnet for VPN/ExpressRoute (exact name required if used)
+        - name: "GatewaySubnet"
+          address_prefixes: ["10.0.1.0/27"]  # Minimum /27 recommended for gateways
+          
+        # OPTIONAL: Shared services subnet for common infrastructure
+        - name: "snet-shared-services"
+          address_prefixes: ["10.0.2.0/24"]
+          service_endpoints: ["Microsoft.Storage", "Microsoft.KeyVault", "Microsoft.Sql"]
+          
+        # OPTIONAL: Management subnet for monitoring and admin tools
+        - name: "snet-management"
+          address_prefixes: ["10.0.3.0/24"]
+          
+        # OPTIONAL: Bastion subnet for secure remote access (exact name required if used)
+        # - name: "AzureBastionSubnet"
+        #   address_prefixes: ["10.0.4.0/27"]  # Minimum /27 required for Azure Bastion
+    
+    # Azure Firewall Configuration
+    firewall:
+      enabled: true                          # Set false to skip firewall deployment
+      name: "afw-hub-westeurope"            # REPLACE: Firewall name
+      sku_tier: "Standard"                  # Options: Standard | Premium
+      
+      # Outbound Connectivity Method
+      # - "firewall": Traditional firewall-based outbound (default)
+      # - "nat_gateway": NAT Gateway for outbound (recommended for high throughput)
+      outbound_method: "nat_gateway"
+      
+      # NAT Gateway Configuration (only used when outbound_method = "nat_gateway")
+      nat_gateway:
+        name: "natgw-hub-westeurope"        # REPLACE: NAT Gateway name
+        public_ip_count: 1                  # Number of public IPs (1-16)
+        idle_timeout_minutes: 4             # Idle timeout (4-120 minutes)
+        zones: ["1"]                        # Availability zones for public IPs
+      
+      # Firewall Policy Configuration
+      policy:
+        name: "afwp-hub-westeurope"         # REPLACE: Firewall policy name
+        threat_intel_mode: "Alert"          # Options: Off | Alert | Deny
+        private_ranges: ["IANAPrivateRanges"]  # Private IP ranges for threat intelligence
+        
+        # DNS Proxy Settings
+        dns_proxy_enabled: true             # Enable DNS proxy through firewall
+        dns_servers: []                     # Custom DNS servers (empty = Azure default)
+        
+        # Firewall Rules (customize for your security requirements)
+        rules:
+          # Application rules for L7 filtering
+          application_rules: []             # Add your application rules here
+          # Network rules for L3/L4 filtering  
+          network_rules: []                 # Add your network rules here
+          # NAT rules for inbound connectivity
+          nat_rules: []                     # Add your NAT rules here
+    
+    # Optional: Additional hub features
+    features:
+      enable_bastion: false                 # Set true to deploy Azure Bastion
+      enable_vpn: false                     # Set true to deploy VPN Gateway
+      enable_expressroute: false            # Set true to deploy ExpressRoute Gateway
+
+  # OPTIONAL: Additional hub for North Europe region (multi-region example)
+  # - name: "hub-northeurope"
+  #   subscription_id: "hub-north-subscription-id"
+  #   resource_group: "rg-hub-northeurope-network"
+  #   location: "northeurope"
+  #   vnet:
+  #     name: "vnet-hub-northeurope"
+  #     address_space: ["10.10.0.0/16"]     # Different address space
+  #     subnets:
+  #       - name: "AzureFirewallSubnet"
+  #         address_prefixes: ["10.10.0.0/26"]
+  #   firewall:
+  #     enabled: true
+  #     name: "afw-hub-northeurope"
+  #     # ... similar configuration
+
+# ============================================================================
+# SPOKE NETWORKS (Workload Isolation)
+# ============================================================================
+# Spoke networks host your workloads and applications
+# Each spoke is connected to a hub for centralized connectivity and security
+
+spokes:
+  # Production workload spoke
+  - name: "spoke-production"                # REPLACE: Spoke name
+    subscription_id: "prod-subscription-id" # REPLACE: Production subscription GUID
+    resource_group: "rg-spoke-production-network"  # REPLACE: Spoke resource group
+    location: "westeurope"                  # Azure region (typically same as hub)
+    
+    # Virtual Network Configuration
+    vnet:
+      name: "vnet-spoke-production"         # REPLACE: Spoke VNet name
+      address_space: ["10.1.0.0/16"]       # REPLACE: Non-overlapping address space
+      
+      # Spoke Subnets - Design based on your application architecture
+      subnets:
+        # Web tier subnet
+        - name: "snet-web"
+          address_prefixes: ["10.1.1.0/24"]
+          route_to_firewall: true           # Route traffic through hub firewall
+          service_endpoints: ["Microsoft.Storage", "Microsoft.KeyVault"]
+          
+        # Application tier subnet
+        - name: "snet-app"
+          address_prefixes: ["10.1.2.0/24"]
+          route_to_firewall: true
+          
+        # Data tier subnet
+        - name: "snet-data"
+          address_prefixes: ["10.1.3.0/24"]
+          route_to_firewall: true
+          service_endpoints: ["Microsoft.Sql", "Microsoft.Storage"]
+          
+        # Optional: Private endpoints subnet
+        - name: "snet-private-endpoints"
+          address_prefixes: ["10.1.4.0/24"]
+          route_to_firewall: false          # Private endpoints don't need firewall routing
+          
+        # Optional: Subnet with delegation (example for Azure Container Instances)
+        # - name: "snet-containers"
+        #   address_prefixes: ["10.1.5.0/24"]
+        #   delegation: "Microsoft.ContainerInstance/containerGroups"
+    
+    # Connectivity to Hub
+    connectivity:
+      hub_name: "hub-westeurope"            # MUST match hub name above
+      enable_peering: true                  # Enable VNet peering to hub
+      allow_forwarded_traffic: true        # Allow traffic forwarded from hub
+      use_remote_gateways: false            # Set true if hub has VPN/ExpressRoute gateways
+
+  # Development workload spoke
+  - name: "spoke-development"
+    subscription_id: "dev-subscription-id" # REPLACE: Development subscription GUID
+    resource_group: "rg-spoke-development-network"
+    location: "westeurope"
+    
+    vnet:
+      name: "vnet-spoke-development"
+      address_space: ["10.2.0.0/16"]       # Different address space from production
+      
+      subnets:
+        # Simplified subnet structure for development
+        - name: "snet-dev-apps"
+          address_prefixes: ["10.2.1.0/24"]
+          route_to_firewall: true
+          service_endpoints: ["Microsoft.Storage"]
+          
+        - name: "snet-dev-data"
+          address_prefixes: ["10.2.2.0/24"]
+          route_to_firewall: true
+    
+    connectivity:
+      hub_name: "hub-westeurope"
+      enable_peering: true
+      allow_forwarded_traffic: true
+      use_remote_gateways: false
+
+  # Staging workload spoke
+  - name: "spoke-staging"
+    subscription_id: "staging-subscription-id"  # REPLACE: Staging subscription GUID
+    resource_group: "rg-spoke-staging-network"
+    location: "westeurope"
+    
+    vnet:
+      name: "vnet-spoke-staging"
+      address_space: ["10.3.0.0/16"]
+      
+      subnets:
+        - name: "snet-staging-web"
+          address_prefixes: ["10.3.1.0/24"]
+          route_to_firewall: true
+          
+        - name: "snet-staging-app"
+          address_prefixes: ["10.3.2.0/24"]
+          route_to_firewall: true
+    
+    connectivity:
+      hub_name: "hub-westeurope"
+      enable_peering: true
+      allow_forwarded_traffic: true
+      use_remote_gateways: false
+
+  # OPTIONAL: Application-specific spoke example
+  # - name: "spoke-app1"
+  #   subscription_id: "app1-subscription-id"
+  #   resource_group: "rg-spoke-app1-network"
+  #   location: "westeurope"
+  #   vnet:
+  #     name: "vnet-spoke-app1"
+  #     address_space: ["10.4.0.0/16"]
+  #     subnets:
+  #       - name: "snet-app1-frontend"
+  #         address_prefixes: ["10.4.1.0/24"]
+  #         route_to_firewall: true
+  #       - name: "snet-app1-backend"
+  #         address_prefixes: ["10.4.2.0/24"]
+  #         route_to_firewall: true
+  #   connectivity:
+  #     hub_name: "hub-westeurope"
+  #     enable_peering: true
+  #     allow_forwarded_traffic: true
+  #     use_remote_gateways: false
+
+# ============================================================================
+# CONFIGURATION GUIDELINES
+# ============================================================================
+
+# NETWORK ARCHITECTURE FLEXIBILITY:
+# The hub-spoke model shown above is highly flexible and can be adapted for:
+# - Single hub with multiple spokes (most common)
+# - Multiple hubs for different regions or purposes
+# - Mesh connectivity between spokes (requires additional peering)
+# - Isolated spokes without hub connectivity
+# - Hybrid connectivity with on-premises networks
+# - Multi-tier application architectures
+# - Microservices with container networking
+# - Any combination that fits your requirements
+
+# ADDRESS SPACE PLANNING:
+# - Plan your IP addressing carefully to avoid overlaps
+# - Reserve space for future growth
+# - Consider integration with on-premises networks
+# - Hub: Typically /16 or /20 depending on services needed
+# - Spokes: Typically /16 to /24 depending on workload size
+# - Leave gaps between address ranges for future spokes
+
+# SECURITY CONSIDERATIONS:
+# - Azure Firewall provides centralized security and logging
+# - Use Network Security Groups (NSGs) for subnet-level security
+# - Consider Azure Private Endpoints for PaaS services
+# - Implement Zero Trust networking principles
+# - Regular review and update of firewall rules
+
+# SUBSCRIPTION STRATEGY:
+# - Hub in shared services or connectivity subscription
+# - Spokes in workload-specific subscriptions
+# - Consider subscription limits and boundaries
+# - Plan for cross-subscription networking permissions
+
+# DEPLOYMENT PHASES:
+# - Phase 1: Deploy hubs first (foundation and security)
+# - Phase 2: Deploy spokes (connectivity to hubs)
+# - Use deployment_phase parameter to control what gets deployed
+
+# ============================================================================
+# VALIDATION CHECKLIST
+# ============================================================================
+# Before deploying this configuration:
+#
+# - All subscription IDs are valid and accessible
+# - Address spaces don't overlap between any networks
+# - Each spoke references an existing hub name in connectivity.hub_name
+# - Hub subnets include required subnets (AzureFirewallSubnet if firewall enabled)
+# - Resource group names are valid and don't conflict
+# - Current user/service principal has network permissions on all subscriptions
+# - Azure regions are valid and support the required services
+# - Firewall rules are configured for your security requirements
+# - Service endpoints match your application requirements
+#
+# Deploy with: terraform plan/apply in the network stack directory

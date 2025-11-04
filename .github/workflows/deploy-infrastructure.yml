@@ -1,0 +1,426 @@
+name: Deploy Infrastructure
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: ['configs/**', 'modules/**', 'stacks/**', '.github/**']
+  
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        default: 'plan'
+        options: ['plan', 'apply', 'destroy']
+      modules:
+        description: 'Modules to deploy'
+        required: true
+        type: choice
+        default: 'all'
+        options: ['mg', 'network', 'policy', 'all']
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: read
+
+env:
+  TF_VERSION: '1.9.8'  # Updated to support latest AVM modules
+  TF_IN_AUTOMATION: true
+  TF_INPUT: false
+
+jobs:
+  # ============================================================================
+  # CHANGE DETECTION & CONFIG VALIDATION
+  # ============================================================================
+  detect-changes:
+    runs-on: [self-hosted, linux]
+    outputs:
+      mg: ${{ steps.check.outputs.mg && steps.config.outputs.mg-exists }}
+      network: ${{ steps.check.outputs.network && steps.config.outputs.network-exists }}
+      policy: ${{ steps.check.outputs.policy && steps.config.outputs.policy-exists }}
+      
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Detect changes
+        id: check
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            mg:
+              - 'modules/mg/**'
+              - 'stacks/mg/**'
+              - 'configs/mg.yaml'
+            network:
+              - 'modules/network/**'
+              - 'stacks/network/**'
+              - 'configs/network.yaml'
+            policy:
+              - 'modules/policy/**'
+              - 'stacks/policy/**'
+              - 'configs/policy.yaml'
+      
+      - name: Check config files exist
+        id: config
+        shell: bash
+        run: |
+          echo "mg-exists=$([[ -f 'configs/mg.yaml' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          echo "network-exists=$([[ -f 'configs/network.yaml' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT  
+          echo "policy-exists=$([[ -f 'configs/policy.yaml' ]] && echo 'true' || echo 'false')" >> $GITHUB_OUTPUT
+          
+          echo "Module status:"
+          [[ "${{ steps.check.outputs.mg }}" == "true" ]] && echo "  - MG: Changes detected $([[ -f 'configs/mg.yaml' ]] && echo 'YES' || echo 'NO (no config)')" || echo "  - MG: No changes"
+          [[ "${{ steps.check.outputs.network }}" == "true" ]] && echo "  - Network: Changes detected $([[ -f 'configs/network.yaml' ]] && echo 'YES' || echo 'NO (no config)')" || echo "  - Network: No changes"
+          [[ "${{ steps.check.outputs.policy }}" == "true" ]] && echo "  - Policy: Changes detected $([[ -f 'configs/policy.yaml' ]] && echo 'YES' || echo 'NO (no config)')" || echo "  - Policy: No changes"
+
+  # ============================================================================
+  # PHASE 1: MANAGEMENT GROUPS
+  # ============================================================================
+  mg-plan:
+    runs-on: [self-hosted, linux]
+    needs: detect-changes
+    if: |
+      needs.detect-changes.outputs.mg == 'true' &&
+      (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'workflow_dispatch' && contains(fromJSON('["mg", "all"]'), github.event.inputs.modules))
+      )
+    environment: mg
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Infrastructure
+        uses: ./.github/actions/setup-infrastructure
+        with:
+          terraform-version: ${{ env.TF_VERSION }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Deploy Management Groups
+        uses: ./.github/actions/terraform-deploy
+        with:
+          working-directory: 'stacks/mg'
+          backend-resource-group: ${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+          backend-storage-account: ${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+          backend-container: ${{ secrets.TF_BACKEND_CONTAINER }}
+          state-key: 'mg.tfstate'
+          action: plan
+
+  mg-apply:
+    runs-on: [self-hosted, linux]
+    needs: [detect-changes, mg-plan]
+    if: |
+      always() &&
+      needs.mg-plan.result == 'success' &&
+      (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply' && contains(fromJSON('["mg", "all"]'), github.event.inputs.modules))
+      )
+    environment: mg  # Add required reviewers here for approval
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Infrastructure
+        uses: ./.github/actions/setup-infrastructure
+        with:
+          terraform-version: ${{ env.TF_VERSION }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Apply Management Groups
+        uses: ./.github/actions/terraform-deploy
+        with:
+          working-directory: 'stacks/mg'
+          backend-resource-group: ${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+          backend-storage-account: ${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+          backend-container: ${{ secrets.TF_BACKEND_CONTAINER }}
+          state-key: 'mg.tfstate'
+          action: apply
+
+  # ============================================================================
+  # PHASE 2A: NETWORK HUBS
+  # ============================================================================
+  network-hubs-plan:
+    runs-on: [self-hosted, linux]
+    needs: [detect-changes, mg-apply]
+    if: |
+      always() &&
+      (needs.mg-apply.result == 'success' || needs.mg-apply.result == 'skipped') &&
+      needs.detect-changes.outputs.network == 'true' &&
+      (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'workflow_dispatch' && contains(fromJSON('["network", "all"]'), github.event.inputs.modules))
+      )
+    
+    strategy:
+      matrix:
+        environment: [hub-westeurope]
+      fail-fast: false
+    
+    environment: ${{ matrix.environment }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Infrastructure
+        uses: ./.github/actions/setup-infrastructure
+        with:
+          terraform-version: ${{ env.TF_VERSION }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Deploy Network Hub
+        uses: ./.github/actions/terraform-deploy
+        with:
+          working-directory: 'stacks/network'
+          backend-resource-group: ${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+          backend-storage-account: ${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+          backend-container: ${{ secrets.TF_BACKEND_CONTAINER }}
+          state-key: '${{ matrix.environment }}.tfstate'
+          action: plan
+          terraform-vars: |
+            environment_name=${{ matrix.environment }}
+            deployment_type=hub
+            target_subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}
+            config_file=../../configs/network.yaml
+            tf_backend_resource_group=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+            tf_backend_storage_account=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+            tf_backend_container=${{ secrets.TF_BACKEND_CONTAINER }}
+
+  network-hubs-apply:
+    runs-on: [self-hosted, linux]
+    needs: [detect-changes, mg-apply, network-hubs-plan]
+    if: |
+      always() &&
+      (needs.mg-apply.result == 'success' || needs.mg-apply.result == 'skipped') &&
+      needs.network-hubs-plan.result == 'success' &&
+      (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply' && contains(fromJSON('["network", "all"]'), github.event.inputs.modules))
+      )
+    
+    strategy:
+      matrix:
+        environment: [hub-westeurope]
+      fail-fast: false
+    
+    environment: ${{ matrix.environment }}  # Add required reviewers here for approval
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Infrastructure
+        uses: ./.github/actions/setup-infrastructure
+        with:
+          terraform-version: ${{ env.TF_VERSION }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Apply Network Hub
+        uses: ./.github/actions/terraform-deploy
+        with:
+          working-directory: 'stacks/network'
+          backend-resource-group: ${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+          backend-storage-account: ${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+          backend-container: ${{ secrets.TF_BACKEND_CONTAINER }}
+          state-key: '${{ matrix.environment }}.tfstate'
+          action: apply
+          terraform-vars: |
+            environment_name=${{ matrix.environment }}
+            deployment_type=hub
+            target_subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}
+            config_file=../../configs/network.yaml
+            tf_backend_resource_group=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+            tf_backend_storage_account=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+            tf_backend_container=${{ secrets.TF_BACKEND_CONTAINER }}
+
+  # ============================================================================
+  # PHASE 2B: NETWORK SPOKES
+  # ============================================================================
+  network-spokes-plan:
+    runs-on: [self-hosted, linux]
+    needs: [detect-changes, network-hubs-apply]
+    if: |
+      always() &&
+      needs.network-hubs-apply.result == 'success' &&
+      needs.detect-changes.outputs.network == 'true' &&
+      (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'workflow_dispatch' && contains(fromJSON('["network", "all"]'), github.event.inputs.modules))
+      )
+    
+    strategy:
+      matrix:
+        environment: [spoke1, spoke2]
+      fail-fast: false
+    
+    environment: ${{ matrix.environment }}
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Infrastructure
+        uses: ./.github/actions/setup-infrastructure
+        with:
+          terraform-version: ${{ env.TF_VERSION }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Deploy Network Spoke
+        uses: ./.github/actions/terraform-deploy
+        with:
+          working-directory: 'stacks/network'
+          backend-resource-group: ${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+          backend-storage-account: ${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+          backend-container: ${{ secrets.TF_BACKEND_CONTAINER }}
+          state-key: '${{ matrix.environment }}.tfstate'
+          action: plan
+          terraform-vars: |
+            environment_name=${{ matrix.environment }}
+            deployment_type=spoke
+            target_subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}
+            config_file=../../configs/network.yaml
+            tf_backend_resource_group=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+            tf_backend_storage_account=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+            tf_backend_container=${{ secrets.TF_BACKEND_CONTAINER }}
+
+  network-spokes-apply:
+    runs-on: [self-hosted, linux]
+    needs: [detect-changes, network-hubs-apply, network-spokes-plan]
+    if: |
+      always() &&
+      needs.network-hubs-apply.result == 'success' &&
+      needs.network-spokes-plan.result == 'success' &&
+      (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply' && contains(fromJSON('["network", "all"]'), github.event.inputs.modules))
+      )
+    
+    strategy:
+      matrix:
+        environment: [spoke1, spoke2]
+      fail-fast: false
+    
+    environment: ${{ matrix.environment }}  # Add required reviewers here for approval
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Infrastructure
+        uses: ./.github/actions/setup-infrastructure
+        with:
+          terraform-version: ${{ env.TF_VERSION }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Apply Network Spoke
+        uses: ./.github/actions/terraform-deploy
+        with:
+          working-directory: 'stacks/network'
+          backend-resource-group: ${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+          backend-storage-account: ${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+          backend-container: ${{ secrets.TF_BACKEND_CONTAINER }}
+          state-key: '${{ matrix.environment }}.tfstate'
+          action: apply
+          terraform-vars: |
+            environment_name=${{ matrix.environment }}
+            deployment_type=spoke
+            target_subscription_id=${{ secrets.AZURE_SUBSCRIPTION_ID }}
+            config_file=../../configs/network.yaml
+            tf_backend_resource_group=${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+            tf_backend_storage_account=${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+            tf_backend_container=${{ secrets.TF_BACKEND_CONTAINER }}
+
+  # ============================================================================
+  # PHASE 3: POLICY (Optional)
+  # ============================================================================
+  policy-plan:
+    runs-on: [self-hosted, linux]
+    needs: [detect-changes, network-spokes-apply]
+    if: |
+      always() &&
+      (needs.network-spokes-apply.result == 'success' || needs.network-spokes-apply.result == 'skipped') &&
+      needs.detect-changes.outputs.policy == 'true' &&
+      (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'workflow_dispatch' && contains(fromJSON('["policy", "all"]'), github.event.inputs.modules))
+      )
+    environment: policy
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Infrastructure
+        uses: ./.github/actions/setup-infrastructure
+        with:
+          terraform-version: ${{ env.TF_VERSION }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Deploy Policy
+        uses: ./.github/actions/terraform-deploy
+        with:
+          working-directory: 'stacks/policy'
+          backend-resource-group: ${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+          backend-storage-account: ${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+          backend-container: ${{ secrets.TF_BACKEND_CONTAINER }}
+          state-key: 'policy.tfstate'
+          action: plan
+
+  policy-apply:
+    runs-on: [self-hosted, linux]
+    needs: [detect-changes, network-spokes-apply, policy-plan]
+    if: |
+      always() &&
+      (needs.network-spokes-apply.result == 'success' || needs.network-spokes-apply.result == 'skipped') &&
+      needs.policy-plan.result == 'success' &&
+      (
+        github.event_name == 'pull_request' ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'apply' && contains(fromJSON('["policy", "all"]'), github.event.inputs.modules))
+      )
+    environment: policy  # Add required reviewers here for approval
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Setup Infrastructure
+        uses: ./.github/actions/setup-infrastructure
+        with:
+          terraform-version: ${{ env.TF_VERSION }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Apply Policy
+        uses: ./.github/actions/terraform-deploy
+        with:
+          working-directory: 'stacks/policy'
+          backend-resource-group: ${{ secrets.TF_BACKEND_RESOURCE_GROUP }}
+          backend-storage-account: ${{ secrets.TF_BACKEND_STORAGE_ACCOUNT }}
+          backend-container: ${{ secrets.TF_BACKEND_CONTAINER }}
+          state-key: 'policy.tfstate'
+          action: apply
