@@ -30,7 +30,11 @@ terraform.tfstate.d/
 backend.hcl
 secrets.yaml
 local-config.yaml
-*local*
+*local.yaml
+*local.yml
+*local.json
+*local.tfvars
+local-*
 *secret*
 *.secret
 *.private
